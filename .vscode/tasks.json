@@ -1,0 +1,116 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "build-release",
+            "type": "shell",
+            "command": "cmake",
+            "args": [
+                "--build",
+                "build",
+                "--config",
+                "Release"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared",
+                "showReuseMessage": true,
+                "clear": false
+            },
+            "problemMatcher": "$msCompile",
+            "detail": "Build OpenD2 in Release configuration",
+            "dependsOn": "configure-cmake"
+        },
+        {
+            "label": "build-debug",
+            "type": "shell",
+            "command": "cmake",
+            "args": [
+                "--build",
+                "build",
+                "--config",
+                "Debug"
+            ],
+            "group": "build",
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared",
+                "showReuseMessage": true,
+                "clear": false
+            },
+            "problemMatcher": "$msCompile",
+            "detail": "Build OpenD2 in Debug configuration",
+            "dependsOn": "configure-cmake"
+        },
+        {
+            "label": "build-all",
+            "dependsOrder": "parallel",
+            "dependsOn": [
+                "build-release",
+                "build-debug"
+            ],
+            "group": "build",
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared",
+                "showReuseMessage": true,
+                "clear": false
+            },
+            "detail": "Build both Release and Debug configurations"
+        },
+        {
+            "label": "clean",
+            "type": "shell",
+            "command": "cmake",
+            "args": [
+                "--build",
+                "build",
+                "--target",
+                "clean"
+            ],
+            "group": "build",
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared",
+                "showReuseMessage": true,
+                "clear": false
+            },
+            "problemMatcher": "$msCompile",
+            "detail": "Clean build artifacts"
+        },
+        {
+            "label": "configure-cmake",
+            "type": "shell",
+            "command": "cmake",
+            "args": [
+                ".."
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}/build"
+            },
+            "group": "build",
+            "presentation": {
+                "echo": true,
+                "reveal": "silent",
+                "focus": false,
+                "panel": "shared",
+                "showReuseMessage": true,
+                "clear": false
+            },
+            "problemMatcher": "$msCompile",
+            "detail": "Configure CMake build system"
+        }
+    ]
+}

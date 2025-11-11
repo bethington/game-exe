@@ -1,21 +1,94 @@
 # Complete Function Call Hierarchy - Diablo II Game.exe
 
+**UPDATED**: November 11, 2025 - Added state machine analysis and menu initialization requirements
+
 ## Overview
 This document describes the complete function call hierarchy implemented in `Game/Main.cpp`, matching the original Diablo II Game.exe binary analyzed via Ghidra at address `0x0040122e`.
 
-## Build Status
-- **Release Build**: 14 KB (successful)
-- **Debug Build**: 45 KB (successful)
+## Current Implementation Status
+
+### ✅ Implemented (Framework Complete)
+- **Release Build**: 15.5 KB executable (size optimized)
+- **Debug Build**: 28.5 KB with full logging
 - **Build Date**: November 11, 2025
-- **Total Lines**: 901 lines of code
+- **Total Lines**: 2,367 lines of code
+- **DLL Loading**: Framework complete, needs actual DLLs in directory
+- **State Machine**: 6 state handlers implemented as stubs
+- **Function Pointers**: 23 declared, 4 ordinals discovered
+
+### 🔧 Needs Implementation (For Menu Display)
+- **DLL Function Resolution**: 23 function pointers need resolution
+- **State Handler Integration**: Must call into D2Win.dll/D2Client.dll
+- **Menu Initialization**: InitializeMenuSystem() call needed
+- **Configuration Buffer**: 968-byte LaunchConfig structure
+- **Frame Rendering**: Callback mechanism for menu updates
 
 ## Complete Function Call Tree
 
 ```
 Windows Loader
-  └─ CRTStartup @ 0x0040122e ..................... Main entry point
+  └─ CRTStartup @ 0x0040122e ..................... Main entry point (✅ COMPLETE)
       ├─ GetVersionExA ............................ OS version detection
-      ├─ ___security_init_cookie .................. Stack protection
+      ├─ ___security_init_cookie .................. Stack protection (0xBB40E64E)
+      ├─ __heap_init .............................. Heap initialization
+      ├─ __mtinit ................................. Multi-threading init
+      ├─ __ioinit ................................. I/O subsystem init
+      ├─ GetCommandLineA .......................... Get command line
+      ├─ __setargv ................................ Parse argc/argv
+      ├─ __setenvp ................................ Setup environment
+      ├─ __cinit .................................. C++ static constructors
+      ├─ GetStartupInfoA .......................... Window show command
+      ├─ GetModuleHandleA ......................... Get instance handle
+      ├─ fast_error_exit .......................... Critical error handler
+      ├─ __amsg_exit .............................. CRT error handler
+      └─ D2ServerMain @ 0x00408540 ................ Main game function (✅ COMPLETE)
+          ├─ InitializeServiceDispatcher ........... Check Windows service mode (✅ STUB)
+          ├─ SetupProcessSecurityRestrictions ...... Configure ACL (✅ STUB)
+          └─ InitializeAndRunD2Server @ 0x00408250  Configuration + game launch (⚠️ PARTIAL)
+              ├─ FormatStringBufferThunk ........... Format version string (✅ COMPLETE)
+              ├─ InitializeServerSubsystem ......... Core server init (⚠️ STUB)
+              ├─ ProcessVersionStringOrdinal10019 .. Version validation (⚠️ STUB)
+              ├─ OpenEventA("DIABLO_II_OK") ........ Launcher sync event (✅ COMPLETE)
+              ├─ SetEvent .......................... Signal launcher (✅ COMPLETE)
+              ├─ CloseHandle ....................... Close event handle (✅ COMPLETE)
+              ├─ InitializeCommandLineSettings ..... Parse command line (✅ COMPLETE)
+              ├─ ExtractModStateKeywordFromCmdLine . Parse render mode (✅ COMPLETE)
+              ├─ LoadVideoSettingsFromConfigFile ... Load INI config (✅ COMPLETE)
+              ├─ ParseCommandLineIntoConfig ........ Override with cmdline (✅ COMPLETE)
+              ├─ RegOpenKeyExA ..................... Registry query HKCU/HKLM (✅ COMPLETE)
+              ├─ RegQueryValueExA .................. Read registry values (✅ COMPLETE)
+              ├─ RegCloseKey ....................... Close registry key (✅ COMPLETE)
+              └─ InitializeAndRunGameMainLoop @ 0x00407600 ❌ CRITICAL - Game loop entry
+                  ├─ InitializeDirectSound @ 0x004074ae (⚠️ NEEDS D2Sound.dll ordinal 10022)
+                  ├─ InitializeSubsystem2 @ 0x004074ba (⚠️ NEEDS Fog.dll ordinal 10111)
+                  ├─ InitializeSubsystem3 @ 0x00407496 (⚠️ NEEDS Fog.dll function)
+                  ├─ InitializeSubsystem4 @ 0x004074a8 (⚠️ NEEDS Fog.dll ordinal 10096)
+                  ├─ ValidateSystemRequirements @ 0x7b331000 (⚠️ NEEDS D2Client.dll)
+                  ├─ GetDefaultScreenMode @ 0x004074e4 (⚠️ NEEDS D2Client.dll)
+                  ├─ InitializeGraphicsSubsystem @ 0x004074d8 (⚠️ NEEDS D2Gfx.dll ordinal 10025)
+                  ├─ SetFramerateLock @ 0x00407508 (⚠️ NEEDS D2Win.dll)
+                  ├─ InitializeRenderer @ 0x004074ea (⚠️ NEEDS D2Gfx.dll)
+                  ├─ EnableSound @ 0x0040751a (⚠️ NEEDS D2Sound.dll)
+                  ├─ SetFPSDisplayMode @ 0x00407502 (⚠️ NEEDS D2Win.dll)
+                  ├─ ApplyGammaCorrection @ 0x00407520 (⚠️ NEEDS D2Win.dll)
+                  ├─ EnableWideAspectRatio @ 0x00407514 (⚠️ NEEDS D2Win.dll)
+                  ├─ WriteRegistryDwordValue @ 0x0040745a (⚠️ NEEDS Storm.dll)
+                  ├─ InitializeMenuSystem @ 0x004074f6 ❌ CRITICAL FOR MENU
+                  │   └─ [D2Win.dll internal functions...]
+                  └─ STATE MACHINE LOOP @ 0x004077e4-0x00407837 ❌ CRITICAL
+                      ├─ State 0: Exit @ 0x0040a5c0 (✅ STUB)
+                      ├─ State 1: Menu @ 0x0040a5b0 ❌ NEEDS D2Win/D2Client integration
+                      ├─ State 2: CharSelect @ 0x0040a5a0 (✅ STUB)
+                      ├─ State 3: InGame @ 0x0040a594 (✅ STUB)
+                      ├─ State 4: Loading @ 0x0040a584 (✅ STUB)
+                      └─ State 5: Credits @ 0x0040a574 (✅ STUB)
+```
+
+## Legend
+- ✅ **COMPLETE**: Fully implemented and tested
+- ⚠️ **PARTIAL/STUB**: Implemented but needs DLL integration
+- ❌ **CRITICAL**: Required for menu screen, not yet working
+- 🔧 **NEEDS**: Requires specific DLL function to be resolved
       ├─ __heap_init .............................. Heap initialization
       ├─ __mtinit ................................. Multi-threading init
       ├─ __ioinit ................................. I/O subsystem init

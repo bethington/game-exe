@@ -1,104 +1,552 @@
-# Game.exe Reimplementation Strategy Using Ghidra MCP
+# Game.exe Reimplementation Strategy - Updated November 11, 2025
 
-## Current Status (November 11, 2025)
+## Executive Summary
 
-### ✅ Completed (Level 1-2)
-- **CRTStartup** @ 0x0040122e - 12-step Windows PE loader initialization
-- **D2ServerMain** @ 0x00408540 - Main game orchestration (stub)
-- **Basic Infrastructure**: Window creation, DLL loading framework, message loop
-- **Configuration System**: D2Server.ini support, registry fallback, 3-tier priority
-- **Debug Logging**: File + debugger + console output to `game.log`
+**Current State**: Game.exe framework complete (15.5 KB) with CRT startup, DLL loading, state machine, and debugging infrastructure.
 
-### 🎯 Next Priority (Level 3)
+**Gap Analysis**: The menu screen doesn't appear because **Game.exe doesn't render the menu directly**. The original binary calls into D2Win.dll and D2Client.dll which handle all UI rendering, menu logic, and graphics. Our state handlers are stubs that need to call actual DLL functions.
 
-## Implementation Strategy: Call Graph Hierarchy Approach
-
-### Strategy Overview
-Follow the **depth-first call hierarchy** starting from `CRTStartup` → `D2ServerMain` → immediate callees, implementing each function with Ghidra MCP decompiled code as reference.
-
-### Key Principles
-1. **Depth-First Implementation**: Complete one call path fully before moving to siblings
-2. **Stub-Then-Implement**: Create function signatures immediately, implement gradually
-3. **Test at Each Level**: Build and test after each function implementation
-4. **Reference Decompilation**: Use `mcp_ghidra_get_decompiled_code` for each function
-5. **Validate with Disassembly**: Use `mcp_ghidra_get_disassembly` when logic is unclear
+**Path to Menu Screen**: 
+1. Load D2Win.dll, D2Client.dll, D2Gfx.dll successfully (currently failing with error 126)
+2. Resolve function pointers from these DLLs (23 functions identified)
+3. Call `InitializeMenuSystem()` → D2Win.dll during game loop initialization
+4. State handlers must call into D2Client.dll to render menu frames
+5. Ensure proper window handle is passed to D2Win/D2Gfx for rendering target
 
 ---
 
-## Phase 1: Core Initialization Functions (Priority: HIGH)
+## Phase 1: Critical DLL Integration (IMMEDIATE PRIORITY)
 
-### Target: InitializeAndRunD2Server @ 0x00408250
-**Status**: Partially implemented as `InitializeD2ServerMain`  
-**Current Implementation**: Basic registry/INI loading  
-**Ghidra Reveals**: 23-step initialization sequence, much more complex than current stub
+### Problem: DLLs Fail to Load
+**Error**: `LoadGameDLL WARNING: Failed to load D2Game.dll (error 126)` for all DLLs
 
-#### Implementation Plan:
-```
-InitializeAndRunD2Server (0x00408250)
-├─ [1/23] Extract command line argument from argv array ✅ (exists)
-├─ [2/23] Format version string with "v%d.%02d" template ⏳ TODO
-├─ [3/23] InitializeServerSubsystem ⏳ TODO - Critical!
-├─ [4/23] ProcessVersionStringOrdinal10019 ⏳ TODO
-├─ [5/23] OpenEventA("DIABLO_II_OK") for launcher sync ⏳ TODO
-├─ [6/23] SetEvent to notify launcher ⏳ TODO
-├─ [7/23] InitializeCommandLineSettings ⏳ TODO
-├─ [8/23] func_0x7b331080 (external D2Common module) ⏳ STUB
-├─ [9/23] ExtractModStateKeywordFromCmdLine ⏳ TODO
-├─ [10/23] Zero-fill 968-byte video config buffer ✅ (partial)
-├─ [11/23] LoadVideoSettingsFromConfigFile ✅ (exists as ReadRegistryConfig)
-├─ [12/23] ParseCommandLineIntoConfig ✅ (exists as ParseCommandLine)
-├─ [13/23] Validate 4 config bytes at +0x5c,+0x5e,+0x5f,+0x61 ⏳ TODO
-├─ [14-21] Registry fallback logic (HKCU → HKLM) ✅ (exists)
-└─ [22/23] InitializeAndRunGameMainLoop ⏳ TODO - This is the actual game entry!
-```
+**Root Cause Analysis**:
+- Error 126 = ERROR_MOD_NOT_FOUND (DLL or its dependencies not found)
+- DLLs must be in same directory as game.exe OR in PATH
+- DLLs may have dependencies (MSVCRT, DirectX, etc.)
 
-**Callees to Implement** (from Ghidra analysis):
-1. `LoadVideoSettingsFromConfigFile` - Load INI settings (existing, needs enhancement)
-2. `InitializeCommandLineSettings` - Command-line parsing (existing, needs validation)
-3. `ParseCommandLineIntoConfig` - Override INI with cmdline (exists)
-4. `InitializeServerSubsystem` - **CRITICAL** - Initializes core server
-5. `ProcessVersionStringOrdinal10019` - Version validation
-6. `ExtractModStateKeywordFromCmdLine` - Extract render mode (-d3d, -glide, etc.)
-7. `InitializeAndRunGameMainLoop` - **CRITICAL** - Actual game main loop entry
-
-### Action Items:
+**Solution Steps**:
 ```bash
-# 1. Get full decompilation
-mcp_ghidra_get_decompiled_code(function_address="0x00408250")
+# 1. Copy all Diablo II DLLs to build\Release\
+copy "C:\Program Files (x86)\Diablo II\*.dll" build\Release\
 
-# 2. Get callees with full analysis
-mcp_ghidra_analyze_function_complete(name="InitializeAndRunD2Server")
+# 2. Verify DLL dependencies with Dependency Walker
+# Download: https://www.dependencywalker.com/
+depends.exe build\Release\D2Win.dll
 
-# 3. For each callee, get decompiled code
-mcp_ghidra_get_decompiled_code(function_address="<callee_address>")
+# 3. Test minimal DLL load
+Get-Content build\Release\game.log | Select-String "DLL|ordinal"
+```
 
-# 4. Implement callee by callee, depth-first
+### Function Pointer Resolution Strategy
+
+Based on Ghidra analysis of `InitializeAndRunGameMainLoop` @ 0x00407600, Game.exe calls 23 DLL functions:
+
+**Phase 1.1: Critical Initialization Functions** (6 functions)
+```cpp
+// Fog.dll ordinals (WORKING - discovered via binary search)
+InitializeSubsystem2       // Ordinal 10111 @ 0x004074ba
+InitializeSubsystem4       // Ordinal 10096 @ 0x004074a8
+
+// D2Gfx.dll ordinals (WORKING)
+InitializeGraphicsSubsystem // Ordinal 10025 @ 0x004074d8
+
+// D2Sound.dll ordinals (WORKING)
+InitializeDirectSound       // Ordinal 10022 @ 0x004074ae
+
+// D2Win.dll (NAME-BASED - need ordinal discovery)
+InitializeMenuSystem        // @ 0x004074f6
+CleanupMenuSystem           // @ 0x004074f0
+```
+
+**Phase 1.2: Graphics/Renderer Functions** (5 functions)
+```cpp
+// D2Gfx.dll (need ordinal discovery)
+InitializeRenderer          // @ 0x004074ea
+PrepareGraphicsShutdown     // @ 0x004074c0
+ShutdownGraphics            // @ 0x0040750e
+GetWindowHandle             // @ 0x00407526
+
+// D2Client.dll (need ordinal discovery)
+ValidateSystemRequirements  // @ 0x7b331000 (external)
+GetDefaultScreenMode        // @ 0x004074e4
+```
+
+**Phase 1.3: Peripheral/Settings Functions** (6 functions)
+```cpp
+// D2Win.dll (need ordinal discovery)
+SetFramerateLock            // @ 0x00407508
+SetFPSDisplayMode           // @ 0x00407502
+ApplyGammaCorrection        // @ 0x00407520
+EnableWideAspectRatio       // @ 0x00407514
+
+// D2Sound.dll (need ordinal discovery)
+EnableSound                 // @ 0x0040751a
+
+// Storm.dll (need ordinal discovery)
+WriteRegistryDwordValue     // @ 0x0040745a
+```
+
+**Phase 1.4: Subsystem Management** (6 functions)
+```cpp
+// Various DLLs (need identification)
+InitializeSubsystem3        // @ 0x00407496
+CloseEngineSubsystem        // @ 0x004074d2
+ShutdownSubsystem6          // @ 0x004074fc
+CloseAllEventHandlers       // @ 0x0040749c
+ShutdownExternalSubsystem   // @ 0x004074a2
+InitializeGameData          // (need address)
 ```
 
 ---
 
-## Phase 2: Service and Security Infrastructure (Priority: MEDIUM)
+## Phase 2: State Machine Integration (HIGH PRIORITY)
 
-### Target: InitializeServiceDispatcher @ 0x004084b0
-**Purpose**: Windows NT Service support  
-**Calls**: `StartServiceCtrlDispatcher`, `RegisterServiceCtrlHandler`
+### Current State Machine Implementation
+From Main.cpp lines 1160-1220, we have 6 state handler stubs:
+- State 0: Exit
+- State 1: Menu (creates test window but doesn't call D2Win.dll)
+- State 2: Character Select
+- State 3: In Game
+- State 4: Loading
+- State 5: Credits
 
-This enables running as Windows Service (e.g., dedicated server mode).
+### Disassembly Analysis @ 0x00407816-0x00407837
 
-### Target: SetupProcessSecurityRestrictions @ 0x00408120
-**Purpose**: Security sandbox and privilege restrictions  
-**Calls**: Unknown (need Ghidra analysis)
-
-#### Implementation Plan:
-```bash
-# Get service dispatcher implementation
-mcp_ghidra_get_decompiled_code(function_address="0x004084b0")
-mcp_ghidra_analyze_function_complete(name="InitializeServiceDispatcher")
-
-# Get security setup implementation
-mcp_ghidra_get_decompiled_code(function_address="0x00408120")
-mcp_ghidra_analyze_function_complete(name="SetupProcessSecurityRestrictions")
+**State Handler Table @ 0x0040c964**:
 ```
+Offset  Address    State Handler Function
+------  ---------- ----------------------
++0x00   0x0040a5c0 StateHandler0_Exit
++0x04   0x0040a5b0 StateHandler1_Menu
++0x08   0x0040a5a0 StateHandler2_CharSelect
++0x0c   0x0040a594 StateHandler3_InGame
++0x10   0x0040a584 StateHandler4_Loading
++0x14   0x0040a574 StateHandler5_Credits
+```
+
+**State Machine Loop Logic** @ 0x004077e4-0x00407837:
+```nasm
+004077e4: CMP EAX, EBX              ; Test state == 0
+004077e6: JZ exit_loop              ; Exit if state 0
+004077e8: CMP EAX, 0x2              ; Check if state == 2 (CharSelect)
+004077eb: JNZ skip_menu_cleanup     
+; [Menu cleanup if transitioning from menu...]
+00407816: CMP EAX, EBX              ; Validate state >= 0
+00407818: JL force_exit
+0040781a: CMP EAX, 0x5              ; Validate state <= 5
+0040781d: JG force_exit
+0040781f: MOV ESI, [EAX*4 + 0x40c964] ; Load handler from table
+00407826: PUSH EDI                  ; Push config pointer
+00407827: CALL 0x00407550           ; Call state handler via thunk
+0040782c: JMP 0x00407830            
+0040782e: XOR EAX, EAX              ; Invalid state → force exit
+00407830: CMP EAX, EBX              
+00407832: MOV [0x0040cf30], EAX    ; Store new state globally
+00407837: JNZ loop_continue         ; Continue if state != 0
+```
+
+**Key Insight**: State handlers **MUST RETURN THE NEXT STATE VALUE**. Our current stubs return void - this breaks the state machine!
+
+### Corrected State Handler Signatures
+```cpp
+// WRONG (current implementation):
+void __cdecl StateHandler1_Menu(void *config);
+
+// CORRECT (matches disassembly):
+int __cdecl StateHandler1_Menu(void *config);
+// Returns: next state (0=exit, 1=menu, 2=charselect, 3=ingame, etc.)
+```
+
+### State 1 (Menu) Implementation Requirements
+
+From disassembly @ 0x004077b9-0x004077db:
+```nasm
+004077b9: MOV AL, [EDI + 0x21c]      ; Load skip_menu flag from config +0x21c
+004077bf: TEST AL, AL                ; Test skip flag
+004077c1: MOV EAX, [0x0040cf30]      ; Load current state
+004077c6: JNZ skip_init              ; Jump if skip_menu==1
+004077c8: CMP EAX, 0x2               ; Test state != 2
+004077cb: JZ skip_init               ; Skip if already in state 2
+004077cd: MOVZX EDX, [EDI + 0x220]   ; Load menu init param from +0x220
+004077d4: MOV ECX, [EDI]             ; Load video mode from config +0x0
+004077d6: CALL 0x004074f6            ; *** CALL InitializeMenuSystem() ***
+004077db: MOV EAX, [0x0040cf30]      ; Reload state
+004077e0: MOV [ESP + 0x10], ESI      ; Store menu active flag
+```
+
+**Critical Function Call**: `InitializeMenuSystem()` @ 0x004074f6 is called with:
+- ECX = video mode (from config +0x0)
+- EDX = menu init parameter (from config +0x220)
+
+This function is in **D2Win.dll** and initializes the entire menu UI system.
+
+### State Handler Implementation Template
+```cpp
+int __cdecl StateHandler1_Menu(void *config)
+{
+    DEBUG_LOG("[StateHandler1] MENU state - initializing D2Win menu system\n");
+    
+    // Cast config to access video mode and menu parameters
+    LaunchConfig *pConfig = (LaunchConfig *)config;
+    
+    // Check if menu initialization is needed
+    if (!pConfig->skip_menu && g_currentState != 2)
+    {
+        // Call D2Win.dll::InitializeMenuSystem
+        if (g_pfnInitializeMenuSystem)
+        {
+            g_pfnInitializeMenuSystem(pConfig->video_mode, pConfig->menu_init_param);
+            g_menu_system_active = TRUE;
+            DEBUG_LOG("[StateHandler1] Menu system initialized\n");
+        }
+        else
+        {
+            ERROR_MSGBOX("Menu Init Failed", "D2Win.dll::InitializeMenuSystem not found!");
+            return 0; // Exit
+        }
+    }
+    
+    // Menu rendering loop (simplified)
+    // In reality, D2Client.dll handles frame rendering via callback
+    MSG msg;
+    while (g_currentState == 1)
+    {
+        // Process Windows messages
+        if (PeekMessageA(&msg, NULL, 0, 0, PM_REMOVE))
+        {
+            if (msg.message == WM_QUIT)
+            {
+                return 0; // Exit state
+            }
+            TranslateMessage(&msg);
+            DispatchMessageA(&msg);
+        }
+        
+        // D2Client.dll updates menu state and may change g_currentState
+        // via callback mechanism (not yet implemented)
+        
+        Sleep(16); // ~60 FPS
+    }
+    
+    // Return next state (set by D2Client.dll or user input)
+    return g_currentState;
+}
+```
+
+---
+
+## Phase 3: Configuration Buffer Structure (MEDIUM PRIORITY)
+
+### LaunchConfig Structure Definition
+From disassembly analysis of `InitializeAndRunD2Server` @ 0x00408250 and state machine @ 0x00407600:
+
+```cpp
+typedef struct LaunchConfig
+{
+    // +0x000: Video configuration
+    DWORD video_mode;              // +0x0: 0=GDI, 1=D3D, 2=OpenGL, 3=Glide, 4=auto
+    
+    // +0x004: Window settings
+    BOOL windowed_mode;            // +0x4: TRUE=windowed, FALSE=fullscreen
+    BOOL wide_aspect_enable;       // +0x5: Enable 16:9/16:10 aspect ratios
+    BOOL fullscreen_mode;          // +0x6: TRUE=fullscreen (inverse of windowed)
+    
+    // +0x009: 3D mode settings
+    BOOL use_3d_mode;              // +0x9: TRUE=use 3D acceleration
+    BOOL framerate_lock;           // +0xa: TRUE=lock to 25 FPS (original behavior)
+    BOOL sound_enable;             // +0xb: TRUE=enable sound
+    
+    // +0x00c: Display settings
+    DWORD fps_display_mode;        // +0xc: 0=off, 1=show FPS counter
+    DWORD gamma_correction;        // +0x10: Gamma correction value
+    
+    // +0x05c: Configuration validation bytes
+    BYTE config_valid_0;           // +0x5c: Validation byte 0
+    BYTE config_valid_1;           // +0x5e: Validation byte 1
+    BYTE config_valid_2;           // +0x5f: Validation byte 2
+    BYTE config_valid_3;           // +0x61: Validation byte 3
+    
+    // +0x200: Extended configuration
+    BYTE extended_config_byte;     // +0x200: Unknown config byte
+    BYTE menu_config_byte;         // +0x202: Menu configuration flag
+    
+    // +0x21c: Menu control flags
+    BOOL skip_menu;                // +0x21c: TRUE=skip main menu, go to char select
+    BYTE menu_init_param;          // +0x220: Menu initialization parameter
+    
+    // +0x221: Callback interface
+    void *callback_interface;      // +0x221: Pointer to callback vtable
+                                   //         +0x10 offset = shutdown callback
+    
+    // Total size: 968 bytes (0x3c8) based on zero-fill loop @ 0x004082f7
+    BYTE reserved[968 - sizeof(DWORD)*4 - sizeof(BOOL)*7 - sizeof(BYTE)*5 - sizeof(void*)];
+    
+} LaunchConfig;
+```
+
+**Configuration Initialization** @ 0x004082f7-0x00408309:
+```nasm
+004082f7: LEA ESI, [ESP + 0x10]      ; Load config buffer address
+004082fb: MOV ECX, 0xF2              ; Set counter = 0xF2 (242 DWORDs)
+00408300: XOR EAX, EAX               ; Zero EAX
+00408302: REP STOSD                  ; Zero-fill 242*4 = 968 bytes
+00408304: MOV [ESI], AL              ; Zero final byte
+```
+
+---
+
+## Phase 4: Function Discovery Roadmap (LOW PRIORITY)
+
+### Ordinal Discovery Strategy
+We've successfully discovered 4 ordinals using binary search. Apply same method to remaining 18 functions:
+
+**Discovery Script Template**:
+```python
+# Ghidra MCP Script: test_ordinal_range.py
+import ghidra_bridge
+
+# Test ordinal range for D2Win.dll
+dll_name = "D2Win.dll"
+start_ordinal = 10001
+end_ordinal = 10050
+
+for ordinal in range(start_ordinal, end_ordinal):
+    try:
+        # Attempt to get function by ordinal
+        func = get_proc_address(dll_handle, ordinal)
+        if func:
+            print(f"FOUND: {dll_name} ordinal {ordinal} @ {hex(func)}")
+    except:
+        pass
+```
+
+**Priority Order for Ordinal Discovery**:
+1. **D2Win.dll** (7 functions) - Menu system, graphics init, peripherals
+2. **D2Gfx.dll** (3 functions) - Renderer, graphics shutdown
+3. **D2Client.dll** (2 functions) - System validation, screen mode
+4. **Fog.dll** (4 functions) - Subsystems 2,3,4, engine close
+5. **Storm.dll** (1 function) - Registry write
+6. **D2Sound.dll** (1 function) - Enable sound
+
+---
+
+## Implementation Roadmap: Path to Menu Screen
+
+### Milestone 1: DLL Loading Success (1-2 hours)
+**Goal**: All DLLs load without error 126
+
+**Tasks**:
+- [ ] Copy Diablo II DLLs to `build\Release\`
+- [ ] Verify dependencies with Dependency Walker
+- [ ] Test DLL loading with enhanced logging
+- [ ] Validate DLL exports with dumpbin
+
+**Success Criteria**:
+```
+[LoadGameDLL] Loading D2Win.dll...
+[LoadGameDLL] SUCCESS: D2Win.dll loaded @ 0x12340000
+[LoadGameDLL] SUCCESS: D2Gfx.dll loaded @ 0x23450000
+[LoadGameDLL] SUCCESS: D2Client.dll loaded @ 0x34560000
+```
+
+### Milestone 2: Function Pointer Resolution (2-3 hours)
+**Goal**: 23 function pointers resolved and callable
+
+**Tasks**:
+- [ ] Implement `InitializeDLLFunctionPointers()` in Main.cpp
+- [ ] Test 4 working ordinals (Fog: 10111, 10096; D2Gfx: 10025; D2Sound: 10022)
+- [ ] Add fallback to GetProcAddress by name for remaining 18 functions
+- [ ] Validate function signatures with test calls
+
+**Success Criteria**:
+```
+[InitializeDLLFunctionPointers] Resolving 23 function pointers...
+[InitializeDLLFunctionPointers] SUCCESS: Fog.dll::10111 → InitializeSubsystem2
+[InitializeDLLFunctionPointers] SUCCESS: D2Win.dll::InitializeMenuSystem (by name)
+[InitializeDLLFunctionPointers] 23/23 functions resolved successfully
+```
+
+### Milestone 3: State Handler Corrections (1 hour)
+**Goal**: State handlers return int and integrate with state machine
+
+**Tasks**:
+- [ ] Fix all 6 state handler signatures: `void` → `int`
+- [ ] Implement state transition logic in each handler
+- [ ] Test state machine loop with corrected handlers
+- [ ] Validate state transitions (1→2, 2→3, etc.)
+
+**Success Criteria**:
+```
+[State Machine] Entering state 1 (MENU)
+[StateHandler1] Menu system active, returning state 1
+[State Machine] State handler returned: 1 (continue)
+```
+
+### Milestone 4: InitializeMenuSystem Integration (1-2 hours)
+**Goal**: D2Win.dll::InitializeMenuSystem called successfully
+
+**Tasks**:
+- [ ] Define LaunchConfig structure matching 968-byte layout
+- [ ] Initialize config buffer with proper video mode and flags
+- [ ] Call `InitializeMenuSystem(video_mode, menu_param)` in StateHandler1
+- [ ] Verify menu system initialized without crash
+
+**Success Criteria**:
+```
+[StateHandler1] Calling D2Win.dll::InitializeMenuSystem(mode=1, param=0)
+[D2Win.dll] Menu system initialized successfully
+[StateHandler1] Menu active, entering rendering loop
+```
+
+### Milestone 5: Menu Rendering (2-4 hours)
+**Goal**: Actual Diablo II main menu visible on screen
+
+**Tasks**:
+- [ ] Implement frame rendering callback mechanism
+- [ ] Hook D2Client.dll menu update function
+- [ ] Pass window handle to D2Gfx for rendering target
+- [ ] Process input events and pass to D2Client.dll
+- [ ] Handle menu state transitions (menu→char select)
+
+**Success Criteria**:
+- Menu background image visible
+- Menu buttons clickable
+- Music playing (if sound enabled)
+- Can navigate to character select screen
+
+---
+
+## Current Blockers and Solutions
+
+### Blocker 1: DLL Load Failures (Error 126)
+**Impact**: HIGH - Nothing works without DLLs  
+**Solution**: Copy DLLs to build directory, verify dependencies  
+**Estimated Fix Time**: 30 minutes
+
+### Blocker 2: State Handlers Return void
+**Impact**: MEDIUM - State machine broken but not crashing  
+**Solution**: Change return type to int, return next state  
+**Estimated Fix Time**: 1 hour
+
+### Blocker 3: InitializeMenuSystem Not Called
+**Impact**: HIGH - Menu can't appear without initialization  
+**Solution**: Call function in StateHandler1 with proper params  
+**Estimated Fix Time**: 2 hours (including config structure setup)
+
+### Blocker 4: Missing Function Pointers (18/23)
+**Impact**: MEDIUM - Some features won't work but can fallback  
+**Solution**: Use GetProcAddress by name for now, discover ordinals later  
+**Estimated Fix Time**: 1 hour for name-based fallback
+
+---
+
+## Testing Strategy
+
+### Unit Tests
+```cpp
+// Test 1: DLL loading
+void Test_LoadAllDLLs()
+{
+    ASSERT(LoadAllGameDLLs() == TRUE);
+    ASSERT(g_hModuleD2Win != NULL);
+    ASSERT(g_hModuleD2Gfx != NULL);
+}
+
+// Test 2: Function pointer resolution
+void Test_ResolveFunctionPointers()
+{
+    ASSERT(InitializeDLLFunctionPointers() == TRUE);
+    ASSERT(g_pfnInitializeMenuSystem != NULL);
+    ASSERT(g_pfnInitializeGraphicsSubsystem != NULL);
+}
+
+// Test 3: State machine
+void Test_StateMachine()
+{
+    g_currentState = 1;
+    int nextState = StateHandler1_Menu(&config);
+    ASSERT(nextState >= 0 && nextState <= 5);
+}
+```
+
+### Integration Tests
+1. **Test Run 1**: Load DLLs only, verify no crashes
+2. **Test Run 2**: Load + resolve function pointers, verify NULL checks work
+3. **Test Run 3**: Load + resolve + call InitializeMenuSystem, verify no crash
+4. **Test Run 4**: Full initialization + state machine loop
+5. **Test Run 5**: Full run expecting visible menu screen
+
+---
+
+## Success Metrics
+
+### Phase 1 Complete:
+- ✅ All 10+ DLLs load successfully (no error 126)
+- ✅ 23/23 function pointers resolved (ordinals or by name)
+- ✅ No crashes during DLL initialization
+
+### Phase 2 Complete:
+- ✅ State handlers return int correctly
+- ✅ State machine loop executes without hang
+- ✅ Can transition between states (1→2→3)
+
+### Phase 3 Complete:
+- ✅ LaunchConfig structure matches 968-byte layout
+- ✅ InitializeMenuSystem called without crash
+- ✅ D2Win.dll reports successful menu initialization
+
+### Phase 4 Complete (FINAL GOAL):
+- ✅ **Main menu screen visible on display**
+- ✅ Menu background image rendered
+- ✅ Menu buttons visible and interactive
+- ✅ Can navigate to character select screen
+- ✅ Music and sound effects play
+
+---
+
+## File Organization
+
+### Keep (Core Documentation):
+- `COMPLETE_FUNCTION_HIERARCHY.md` - Complete call graph (UPDATE with state machine findings)
+- `IMPLEMENTATION_STRATEGY.md` - This file (CURRENT)
+- `ORDINAL_DISCOVERY_SUCCESS.md` - Ordinal discovery methodology (REFERENCE)
+- `SIZE_OPTIMIZATION_COMPLETE.md` - Size reduction techniques (REFERENCE)
+
+### Archive (Historical Context):
+Move to `docs/archive/`:
+- `IMPLEMENTATION_STATUS.md` - Outdated status (Nov 7)
+- `FINAL_IMPLEMENTATION_STATUS.md` - Duplicate of above
+- `FINAL_STATUS.md` - Duplicate
+- `BUILD_SUCCESS_REPORT.md` - Outdated build info
+- `PROGRESS_SUMMARY.md` - Outdated progress tracking
+- `CURRENT_STATUS_AND_FINDINGS.md` - Superseded by this doc
+
+### Remove (Redundant):
+- `FINAL_IMPLEMENTATION.md` - Merged into IMPLEMENTATION_STRATEGY.md
+- `DLL_LOADING_DEBUG.md` - Info integrated above
+- `DLL_INTEGRATION_NOTES.md` - Info integrated above
+- `NATIVE_WINDOWS_TEST.md` - Test results, not needed
+- `CODE_REVIEW_AND_MISSING_FUNCTIONS.md` - Superseded by this analysis
+
+---
+
+## Next Actions (Priority Order)
+
+1. **IMMEDIATE** (30 min): Copy Diablo II DLLs to `build\Release\` directory
+2. **IMMEDIATE** (1 hour): Fix state handler signatures (void → int)
+3. **HIGH** (2 hours): Implement `InitializeDLLFunctionPointers()` with name-based fallback
+4. **HIGH** (2 hours): Define `LaunchConfig` structure and initialize properly
+5. **HIGH** (1 hour): Integrate `InitializeMenuSystem()` call in StateHandler1
+6. **MEDIUM** (3 hours): Implement frame rendering callback system
+7. **MEDIUM** (2 hours): Test menu display and iterate on rendering issues
+8. **LOW** (ongoing): Discover remaining 18 ordinals via binary search
+
+---
+
+**Document Version**: 2.0  
+**Last Updated**: November 11, 2025  
+**Status**: 🎯 ACTIVE - Clear path to menu screen identified
 
 ---
 

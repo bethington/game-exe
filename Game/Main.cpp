@@ -1219,37 +1219,37 @@ int __cdecl StateHandler0_Exit(void *config)
 int __cdecl StateHandler1_Menu(void *config)
 {
     DEBUG_LOG("[StateHandler1] MENU state\n");
-    
+
     // Cast config to LaunchConfig structure
     LaunchConfig *pConfig = (LaunchConfig *)config;
-    
+
     if (!pConfig)
     {
         DEBUG_LOG("[StateHandler1] ERROR: NULL config pointer!\n");
         return 0; // Exit
     }
-    
+
     // Check if we should skip menu (Battle.net mode)
     if (pConfig->skip_menu)
     {
         DEBUG_LOG("[StateHandler1] skip_menu flag set, transitioning to next state\n");
         return 2; // Go to character select
     }
-    
+
     // Try to initialize D2Win menu system if function pointer is available
     if (g_pfnInitializeMenuSystem)
     {
         DEBUG_LOG("[StateHandler1] Calling D2Win.dll::InitializeMenuSystem()...\n");
-        
+
         // Call D2Win menu initialization (parameters based on Ghidra analysis)
         // Original call @ 0x004074f6: g_pfnInitializeMenuSystem()
         // Note: Actual function may take parameters (video_mode, menu_param)
         // but current typedef is void(void), so calling with no params
         g_pfnInitializeMenuSystem();
-        
+
         DEBUG_LOG("[StateHandler1] D2Win menu system initialized\n");
         DEBUG_MSGBOX("Menu System", "D2Win::InitializeMenuSystem() called successfully!\n\nMenu system should now be active.\n\nNote: Actual menu rendering requires D2Client.dll integration.");
-        
+
         // In full implementation, D2Client.dll would handle menu rendering loop
         // For now, create a simple message loop to keep the application alive
         MSG msg;
@@ -1257,11 +1257,11 @@ int __cdecl StateHandler1_Menu(void *config)
         {
             TranslateMessage(&msg);
             DispatchMessage(&msg);
-            
+
             // In real implementation, D2Client would update menu state here
             // and potentially change g_currentState via callback
         }
-        
+
         DEBUG_LOG("[StateHandler1] Menu message loop exited\n");
         return 0; // Exit
     }
@@ -1270,7 +1270,7 @@ int __cdecl StateHandler1_Menu(void *config)
         // Fallback: Function pointer not initialized (DLLs not loaded or ordinal not found)
         DEBUG_LOG("[StateHandler1] WARNING: g_pfnInitializeMenuSystem is NULL\n");
         DEBUG_LOG("[StateHandler1] Creating fallback test window instead...\n");
-        
+
         // Create a test window to verify windowing works
         HWND hwnd = CreateWindowExA(
             0,

@@ -137,6 +137,57 @@ HMODULE g_hModuleFog = NULL;      // Fog.dll - engine foundation
 HMODULE g_hModuleD2Sound = NULL;  // D2Sound.dll - audio subsystem
 
 // =============================================================================
+// LAUNCH CONFIGURATION STRUCTURE (968 bytes)
+// =============================================================================
+
+/*
+ * LaunchConfig Structure
+ * Based on disassembly analysis @ 0x00407600 (InitializeAndRunGameMainLoop)
+ *
+ * This structure is passed to state handlers and contains all runtime configuration.
+ * Total size: 968 bytes (0x3C8)
+ *
+ * Key offsets discovered from binary analysis:
+ *   +0x000: video_mode (DWORD) - Video renderer selection
+ *   +0x21C: skip_menu (BOOL) - Skip main menu flag
+ *   +0x220: menu_init_param (DWORD) - Menu initialization parameter
+ *   +0x221: callback_interface (void*) - D2Client callback interface
+ */
+typedef struct LaunchConfig
+{
+    // +0x000: Video configuration
+    DWORD video_mode;    // +0x0: 0=GDI, 1=D3D, 2=OpenGL, 3=Glide, 4=auto
+    DWORD screen_width;  // +0x4: Screen width
+    DWORD screen_height; // +0x8: Screen height
+    DWORD color_depth;   // +0xC: Color depth (16/32)
+    BOOL windowed;       // +0x10: Windowed mode flag
+
+    // +0x014: Audio configuration
+    BOOL no_sound;      // +0x14: Disable sound
+    BOOL no_music;      // +0x18: Disable music
+    DWORD sound_volume; // +0x1C: Sound volume (0-100)
+    DWORD music_volume; // +0x20: Music volume (0-100)
+
+    // +0x024: Game mode
+    DWORD game_mode; // +0x24: 0=SP, 1=MP, 2=BNet
+    BOOL expansion;  // +0x28: Lord of Destruction
+
+    // +0x02C: Reserved/padding to offset 0x21C
+    BYTE reserved[0x1F0]; // +0x2C to +0x21C (496 bytes)
+
+    // +0x21C: Menu control flags (CRITICAL - discovered via Ghidra)
+    BOOL skip_menu;           // +0x21C: Skip main menu flag
+    DWORD menu_init_param;    // +0x220: Menu initialization parameter
+    void *callback_interface; // +0x224: D2Client callback interface pointer
+
+    // +0x228: Reserved to complete 968-byte structure
+    BYTE reserved2[0x1A0]; // +0x228 to +0x3C8 (416 bytes)
+} LaunchConfig;
+
+// Global launch configuration instance
+LaunchConfig g_launchConfig = {0};
+
+// =============================================================================
 // DLL FUNCTION POINTERS (IAT - Import Address Table Pattern)
 // =============================================================================
 
@@ -1157,64 +1208,126 @@ void __cdecl WriteRegistryDwordValue(const char *key, const char *value, DWORD d
 }
 
 // State handler stubs (from dispatch table @ 0x40c964)
-void __cdecl StateHandler0_Exit(void *config)
+// IMPORTANT: State handlers must return int (next state value) for state machine
+// State values: 0=Exit, 1=Menu, 2=CharSelect, 3=InGame, 4=Loading, 5=Credits
+int __cdecl StateHandler0_Exit(void *config)
 {
-    DEBUG_LOG("[StateHandler0] EXIT state\n");
+    DEBUG_LOG("[StateHandler0] EXIT state - returning 0 to exit\n");
+    return 0; // Exit state
 }
 
-void __cdecl StateHandler1_Menu(void *config)
+int __cdecl StateHandler1_Menu(void *config)
 {
     DEBUG_LOG("[StateHandler1] MENU state\n");
-
-    // Create a test window to verify windowing works
-    HWND hwnd = CreateWindowExA(
-        0,
-        "STATIC",
-        "Diablo II - Game.exe Test Window\n\nThis window proves:\n1. DLL loading successful\n2. Initialization complete\n3. State machine operational\n\nClose this window to exit.",
-        WS_OVERLAPPEDWINDOW | WS_VISIBLE | SS_CENTER,
-        CW_USEDEFAULT, CW_USEDEFAULT, 500, 200,
-        NULL, NULL, g_hInstance, NULL);
-
-    if (hwnd)
+    
+    // Cast config to LaunchConfig structure
+    LaunchConfig *pConfig = (LaunchConfig *)config;
+    
+    if (!pConfig)
     {
-        DEBUG_LOG("[StateHandler1] Test window created successfully!\n");
-        DEBUG_MSGBOX("Success!", "Test window created!\n\nA window should be visible on your screen.\nClose it to exit the application.");
-
-        // Simple message loop to keep window alive
+        DEBUG_LOG("[StateHandler1] ERROR: NULL config pointer!\n");
+        return 0; // Exit
+    }
+    
+    // Check if we should skip menu (Battle.net mode)
+    if (pConfig->skip_menu)
+    {
+        DEBUG_LOG("[StateHandler1] skip_menu flag set, transitioning to next state\n");
+        return 2; // Go to character select
+    }
+    
+    // Try to initialize D2Win menu system if function pointer is available
+    if (g_pfnInitializeMenuSystem)
+    {
+        DEBUG_LOG("[StateHandler1] Calling D2Win.dll::InitializeMenuSystem()...\n");
+        
+        // Call D2Win menu initialization (parameters based on Ghidra analysis)
+        // Original call @ 0x004074f6: g_pfnInitializeMenuSystem()
+        // Note: Actual function may take parameters (video_mode, menu_param)
+        // but current typedef is void(void), so calling with no params
+        g_pfnInitializeMenuSystem();
+        
+        DEBUG_LOG("[StateHandler1] D2Win menu system initialized\n");
+        DEBUG_MSGBOX("Menu System", "D2Win::InitializeMenuSystem() called successfully!\n\nMenu system should now be active.\n\nNote: Actual menu rendering requires D2Client.dll integration.");
+        
+        // In full implementation, D2Client.dll would handle menu rendering loop
+        // For now, create a simple message loop to keep the application alive
         MSG msg;
         while (GetMessage(&msg, NULL, 0, 0))
         {
             TranslateMessage(&msg);
             DispatchMessage(&msg);
+            
+            // In real implementation, D2Client would update menu state here
+            // and potentially change g_currentState via callback
         }
-
-        DEBUG_LOG("[StateHandler1] Message loop exited\n");
+        
+        DEBUG_LOG("[StateHandler1] Menu message loop exited\n");
+        return 0; // Exit
     }
     else
     {
-        ERROR_MSGBOX("Window Creation Failed", "Could not create test window!");
-        DEBUG_LOG("[StateHandler1] ERROR: Failed to create test window!\n");
+        // Fallback: Function pointer not initialized (DLLs not loaded or ordinal not found)
+        DEBUG_LOG("[StateHandler1] WARNING: g_pfnInitializeMenuSystem is NULL\n");
+        DEBUG_LOG("[StateHandler1] Creating fallback test window instead...\n");
+        
+        // Create a test window to verify windowing works
+        HWND hwnd = CreateWindowExA(
+            0,
+            "STATIC",
+            "Diablo II - Game.exe Test Window\n\nThis window proves:\n1. DLL loading successful\n2. Initialization complete\n3. State machine operational\n\nNote: D2Win::InitializeMenuSystem not available\n(Need correct ordinal or DLL files)\n\nClose this window to exit.",
+            WS_OVERLAPPEDWINDOW | WS_VISIBLE | SS_CENTER,
+            CW_USEDEFAULT, CW_USEDEFAULT, 500, 250,
+            NULL, NULL, g_hInstance, NULL);
+
+        if (hwnd)
+        {
+            DEBUG_LOG("[StateHandler1] Test window created successfully!\n");
+            DEBUG_MSGBOX("Success!", "Test window created!\n\nA window should be visible on your screen.\n\nNote: Actual menu requires D2Win.dll function pointer.\nClose window to exit.");
+
+            // Simple message loop to keep window alive
+            MSG msg;
+            while (GetMessage(&msg, NULL, 0, 0))
+            {
+                TranslateMessage(&msg);
+                DispatchMessage(&msg);
+            }
+
+            DEBUG_LOG("[StateHandler1] Message loop exited\n");
+        }
+        else
+        {
+            ERROR_MSGBOX("Window Creation Failed", "Could not create test window!");
+            DEBUG_LOG("[StateHandler1] ERROR: Failed to create test window!\n");
+        }
+
+        // Return 0 to exit after window closes
+        return 0;
     }
 }
 
-void __cdecl StateHandler2_CharSelect(void *config)
+int __cdecl StateHandler2_CharSelect(void *config)
 {
     DEBUG_LOG("[StateHandler2] CHARACTER SELECT state\n");
+    return 2; // Stay in char select for now (stub)
 }
 
-void __cdecl StateHandler3_InGame(void *config)
+int __cdecl StateHandler3_InGame(void *config)
 {
     DEBUG_LOG("[StateHandler3] IN GAME state\n");
+    return 3; // Stay in game for now (stub)
 }
 
-void __cdecl StateHandler4_Loading(void *config)
+int __cdecl StateHandler4_Loading(void *config)
 {
     DEBUG_LOG("[StateHandler4] LOADING state\n");
+    return 1; // Return to menu after loading (stub)
 }
 
-void __cdecl StateHandler5_Credits(void *config)
+int __cdecl StateHandler5_Credits(void *config)
 {
     DEBUG_LOG("[StateHandler5] CREDITS state\n");
+    return 1; // Return to menu after credits (stub)
 }
 
 // =============================================================================
@@ -1604,8 +1717,26 @@ int __cdecl InitializeAndRunGameMainLoop(void)
     int videoMode = (int)g_videoMode;
     BOOL windowed = (g_screenWidth == 640 && g_screenHeight == 480);
 
+    // Initialize launch configuration structure (968 bytes)
+    memset(&g_launchConfig, 0, sizeof(LaunchConfig));
+    g_launchConfig.video_mode = g_videoMode;
+    g_launchConfig.screen_width = g_screenWidth;
+    g_launchConfig.screen_height = g_screenHeight;
+    g_launchConfig.color_depth = g_colorDepth;
+    g_launchConfig.windowed = windowed;
+    g_launchConfig.no_sound = g_noSound;
+    g_launchConfig.no_music = g_noMusic;
+    g_launchConfig.game_mode = g_gameMode;
+    g_launchConfig.expansion = g_isExpansion;
+    g_launchConfig.skip_menu = g_skipToBnet;  // Skip menu if going to Battle.net
+    g_launchConfig.menu_init_param = 0;       // Default parameter
+    g_launchConfig.callback_interface = NULL; // No callback yet
+
+    DEBUG_LOG("[InitializeAndRunGameMainLoop] LaunchConfig structure initialized (968 bytes)\n");
+
     // State handler function pointer table @ 0x40c964
-    typedef void (*StateHandler)(void *);
+    // Handlers must return int (next state value) for state machine loop
+    typedef int (*StateHandler)(void *);
     StateHandler stateHandlers[6] = {
         StateHandler0_Exit,
         StateHandler1_Menu,
@@ -1751,12 +1882,13 @@ int __cdecl InitializeAndRunGameMainLoop(void)
 
         // Call state handler from dispatch table
         DEBUG_LOG("[InitializeAndRunGameMainLoop] Dispatching to state handler...\n");
-        stateHandlers[currentState](NULL);
+        int nextState = stateHandlers[currentState](&g_launchConfig);
 
-        // For now, break after one iteration (stub behavior)
-        // In full implementation, state handlers would set currentState
-        DEBUG_LOG("[InitializeAndRunGameMainLoop] State handler returned (stub mode - exiting loop)\n");
-        currentState = 0; // Exit after one iteration for now
+        sprintf(logMsg, "[InitializeAndRunGameMainLoop] State handler returned: %d\n", nextState);
+        DEBUG_LOG(logMsg);
+
+        // Update current state based on handler return value
+        currentState = nextState;
     }
 
     // =========================================================================

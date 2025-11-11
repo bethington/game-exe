@@ -11,9 +11,12 @@ option(BUILD_GAME "Build Executable" ON)
 # Common options
 set(STATIC_LIBRARIES dbghelp.lib psapi.lib)
 
-# Add shared files
-file(GLOB_RECURSE SHARED_SRC Shared/*.h Shared/*.hpp Shared/*.c Shared/*.cpp)
-source_group("Shared" FILES ${SHARED_SRC})
+# Add DLL import directories
+link_directories(${CMAKE_CURRENT_BINARY_DIR}/Release)
+
+# Add shared files (commented out - not using shared files for minimal app)
+# file(GLOB_RECURSE SHARED_SRC Shared/*.h Shared/*.hpp Shared/*.c Shared/*.cpp)
+# source_group("Shared" FILES ${SHARED_SRC})
 
 # Build game.exe
 if(BUILD_GAME)
@@ -21,14 +24,24 @@ if(BUILD_GAME)
 
 	file(GLOB_RECURSE GAME_SRC Game/*.h Game/*.hpp Game/*.c Game/*.cpp)
 	source_group("Game" FILES ${GAME_SRC})
-	set(GAME_SRC ${GAME_SRC} ${SHARED_SRC})
+	# set(GAME_SRC ${GAME_SRC} ${SHARED_SRC})
 
 	link_directories("../Shared")
 
-	add_executable(game WIN32 ${GAME_SRC})
+	add_executable(game ${GAME_SRC})
 	set_target_properties(game PROPERTIES OUTPUT_NAME game)
 	set_target_properties(game PROPERTIES LINKER_LANGUAGE CXX)
-	target_link_libraries(game ${STATIC_LIBRARIES})
+	
+	# Set CRTStartup as entry point (matching original Diablo II @ 0x0040122e)
+	# Use WINDOWS subsystem and link with proper CRT libraries
+	set_target_properties(game PROPERTIES LINK_FLAGS "/SUBSYSTEM:WINDOWS /ENTRY:CRTStartup")
+	
+	# Link Release and Debug CRT libraries
+	target_link_libraries(game 
+		${STATIC_LIBRARIES}
+		$<$<CONFIG:Release>:legacy_stdio_definitions.lib ucrt.lib vcruntime.lib>
+		$<$<CONFIG:Debug>:legacy_stdio_definitions.lib ucrtd.lib vcruntimed.lib>
+	)
 	target_compile_definitions(game PUBLIC D2EXE)
 endif()
 

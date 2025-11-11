@@ -15,6 +15,7 @@
 *.so
 *.dylib
 *.dll
+*.DLL
 
 # Fortran module files
 *.mod
@@ -28,10 +29,58 @@
 
 # Executables
 *.exe
+*.EXE
 *.out
 *.app
 
-# Projects
+# Diablo II Game Files
+*.mpq
+*.MPQ
+*.key
+*.KEY
+*.bin
+*.BIN
+*.dat
+*.DAT
+
+# Log Files
+*.log
+*.LOG
+
+# Build Directories
 Build/*
+build/*
 Win32/*
+x64/*
 game.dir/*
+Debug/*
+Release/*
+.vs/*
+.vscode/*
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+*.sln
+
+# IDE
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Claude AI Assistant
+.claude/
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.old
+game_dll_loading.log
